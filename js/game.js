@@ -148,6 +148,33 @@
     const fallbackPlayers = new Map();
     const FENGYI_CLIP = 'assets/meme/fengyi_clip.m4a';
     const WEILONG_CLIP = 'assets/meme/weilong_voice.m4a';
+    const MASTER_GAIN = 0.45;
+
+    function warm() {
+      if (!audio) return;
+      try {
+        const src = audio.createBufferSource();
+        src.buffer = audio.createBuffer(1, 1, audio.sampleRate);
+        src.connect(audio.destination);
+        src.start(0);
+      } catch (error) { /* ignore */ }
+    }
+
+    // 微信 / QQ 内置浏览器的 WebAudio 需要走它自己的通道才会出声，
+    // 否则 AudioContext 一直是 suspended，表现就是"完全没有声音"。
+    function wechatUnlock() {
+      const bridge = window.WeixinJSBridge;
+      if (!bridge || !bridge.invoke) return;
+      try {
+        bridge.invoke('getNetworkType', {}, function () {
+          if (!enabled) return;
+          const ac = ensure();
+          if (ac && ac.state === 'suspended') ac.resume();
+          warm();
+          preloadClips();
+        });
+      } catch (error) { /* ignore */ }
+    }
 
     function ensure() {
       if (!enabled) return null;
@@ -156,7 +183,7 @@
         if (!AC) return null;
         audio = new AC();
         master = audio.createGain();
-        master.gain.value = 0.2;
+        master.gain.value = MASTER_GAIN;
         master.connect(audio.destination);
       }
       if (audio.state === 'suspended') audio.resume();
@@ -293,14 +320,18 @@
       get enabled() { return enabled; },
       setEnabled: function (value) {
         enabled = Boolean(value);
-        if (master) master.gain.value = enabled ? 0.2 : 0;
+        if (master) master.gain.value = enabled ? MASTER_GAIN : 0;
         if (enabled) {
           ensure();
+          wechatUnlock();
           preloadClips();
         }
       },
       unlock: function () {
-        ensure();
+        const ac = ensure();
+        if (ac && ac.state === 'suspended') ac.resume();
+        warm();
+        wechatUnlock();
         preloadClips();
       },
       drop: function () { tone(120, 0.08, 'triangle', 0.22); },
@@ -338,6 +369,18 @@
       click: function () { tone(620, 0.04, 'square', 0.05); }
     };
   })();
+
+  // 微信 / QQ 内置浏览器的解锁时机
+  document.addEventListener('WeixinJSBridgeReady', function () {
+    Sound.unlock();
+  }, false);
+  document.addEventListener('touchstart', function once() {
+    document.removeEventListener('touchstart', once, false);
+    Sound.unlock();
+  }, { passive: true });
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) Sound.unlock();
+  }, false);
 
   /* ------------------------------ state ----------------------------- */
 
